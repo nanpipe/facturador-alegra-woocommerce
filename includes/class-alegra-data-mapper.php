@@ -2,55 +2,63 @@
 /**
  * Clase que se encarga de mapear datos de WooCommerce a la estructura de Alegra.
  */
-class Alegra_Data_Mapper {
+class Alegra_Data_Mapper
+{
 
     private $api_client;
 
-    public function __construct( Alegra_API_Client $client ) {
+    public function __construct(Alegra_API_Client $client)
+    {
         $this->api_client = $client;
     }
 
     /**
      * Obtiene o crea el cliente en Alegra.
      */
-    public function get_or_create_client( WC_Order $order ) {
+    public function get_or_create_client(WC_Order $order)
+    {
         // [CÓDIGO DE get_or_create_client, incluyendo el cálculo del DV, va aquí]
 
         // A. Identificación
-        $billing_id = $order->get_meta('_billing_cedula') 
-                    ?: $order->get_meta('billing_cedula') 
-                    ?: $order->get_meta('_billing_identification')
-                    ?: $order->get_meta('billing_identification')
-                    ?: $order->get_billing_email();
+        $billing_id = $order->get_meta('_billing_cedula')
+            ?: $order->get_meta('billing_cedula')
+            ?: $order->get_meta('_billing_identification')
+            ?: $order->get_meta('billing_identification')
+            ?: $order->get_billing_email();
 
-        if ( empty($billing_id) ) {
+        if (empty($billing_id)) {
             $billing_id = 'CF-' . $order->get_id(); // Consumidor Final si no hay ID
         }
 
         // B. Buscar existente
         $search = $this->api_client->call_api('contacts?query=' . urlencode($billing_id), null, 'GET');
-        
-        if ( is_array($search) && !empty($search) && isset($search[0]->id) ) {
+
+        if (is_array($search) && !empty($search) && isset($search[0]->id)) {
             return $search[0]->id;
         }
 
         // C. Crear nuevo 
         $first_name = $order->get_billing_first_name();
-        $last_name  = $order->get_billing_last_name();
-        $full_name  = trim($first_name . ' ' . $last_name);
-        if ( empty($full_name) ) $full_name = 'Cliente WooCommerce';
+        $last_name = $order->get_billing_last_name();
+        $full_name = trim($first_name . ' ' . $last_name);
+        if (empty($full_name))
+            $full_name = 'Cliente WooCommerce';
 
-        $company    = $order->get_billing_company();
-        $email      = $order->get_billing_email();
+        $company = $order->get_billing_company();
+        $email = $order->get_billing_email();
 
         $wc_type = $order->get_meta('billing_typeid') ?: 'CC';
-        $doc_type = 'CC'; 
-        if ( stripos($wc_type, 'NIT') !== false ) $doc_type = 'NIT';
-        if ( stripos($wc_type, 'CE') !== false )  $doc_type = 'CE';
-        if ( stripos($wc_type, 'TI') !== false )  $doc_type = 'TI';
-        if ( stripos($wc_type, 'PP') !== false )  $doc_type = 'PP';
+        $doc_type = 'CC';
+        if (stripos($wc_type, 'NIT') !== false)
+            $doc_type = 'NIT';
+        if (stripos($wc_type, 'CE') !== false)
+            $doc_type = 'CE';
+        if (stripos($wc_type, 'TI') !== false)
+            $doc_type = 'TI';
+        if (stripos($wc_type, 'PP') !== false)
+            $doc_type = 'PP';
 
-        if ( !empty($company) || $doc_type === 'NIT' ) {
+        if (!empty($company) || $doc_type === 'NIT') {
             $kindOfPerson = 'LEGAL_ENTITY';
             $regime = 'COMMON_REGIME';
             $display_name = !empty($company) ? $company : $full_name;
@@ -63,7 +71,7 @@ class Alegra_Data_Mapper {
         $client_payload = [
             'name' => $display_name,
             'identificationObject' => [
-                'type'   => $doc_type,
+                'type' => $doc_type,
                 'number' => $billing_id
             ],
             'email' => $email,
@@ -71,20 +79,20 @@ class Alegra_Data_Mapper {
             'regime' => $regime
         ];
 
-        if ( $doc_type === 'NIT' ) {
+        if ($doc_type === 'NIT') {
             $client_payload['identificationObject']['dv'] = $this->calcular_dv($billing_id);
         }
 
-        if ( $kindOfPerson === 'PERSON_ENTITY' ) {
+        if ($kindOfPerson === 'PERSON_ENTITY') {
             $client_payload['nameObject'] = [
                 'firstName' => $first_name ?: 'Cliente',
-                'lastName'  => $last_name  ?: 'Final'
+                'lastName' => $last_name ?: 'Final'
             ];
         }
 
         $created = $this->api_client->call_api('contacts', $client_payload, 'POST');
 
-        if ( isset($created->id) ) {
+        if (isset($created->id)) {
             return $created->id;
         }
 
@@ -95,101 +103,167 @@ class Alegra_Data_Mapper {
     /**
      * Construye el payload de la factura (build_invoice_payload) con toda la lógica de ítems, fees y descuentos.
      */
-    public function build_invoice_payload( WC_Order $order, $client_id ) {
-        // [CÓDIGO DE build_invoice_payload (versión final) va aquí]
+    /**
+     * Construye el payload de la factura, distribuyendo los descuentos de las tarifas negativas 
+     * entre los ítems del producto.
+     */
+    // Dentro de includes/class-alegra-data-mapper.php
 
-        $items = [];
-        $alegra_product_id = 1; 
+/**
+ * Construye el payload de la factura, distribuyendo los descuentos de las tarifas negativas 
+ * de manera exacta al RESTAR del precio unitario de los ítems del producto.
+ */
+public function build_invoice_payload(WC_Order $order, $client_id)
+{
+    $items = [];
+    $alegra_product_id = 1;
 
-        // 1. Procesar items de producto
-        foreach ( $order->get_items() as $line ) {
-            $qty = (float) $line->get_quantity();
-            $total = (float) $line->get_total();
-            $unit = $qty ? round($total / $qty, 2) : 0;
+    // --- 1. Calcular y Separar Fees/Descuentos (Pre-cálculo) ---
 
-            $items[] = [
-                'id'          => $alegra_product_id, 
-                'name'        => substr( $line->get_name(), 0, 190 ),
-                'price'       => $unit,
-                'quantity'    => $qty,
-                'discount'    => 0,
-                'description' => substr( $line->get_name(), 0, 400 ),
-                'tax'         => [], 
+    // Usaremos floor() y round() en todas partes si la moneda no tiene decimales. 
+    // Si la moneda DEBE usar decimales (como COP), usaremos round(..., 0) para forzar el entero.
+    
+    // Asumiendo que trabajamos en la unidad monetaria entera (ej: pesos sin centavos)
+    $negative_fees_discount = 0; // Total de descuento proveniente de fees negativos
+    $positive_fees = [];// Array para guardar fees positivos
+
+    foreach ($order->get_fees() as $fee) {
+        // Redondeamos para asegurar que el total es un entero
+        $fee_total = round((float) $fee->get_total()); 
+        $fee_name = substr($fee->get_name(), 0, 150);
+
+        if ($fee_total < 0) {
+            // Sumar el valor absoluto del descuento total (como entero)
+            $negative_fees_discount += abs($fee_total);
+        } else {
+            // Guardar tarifas positivas para procesarlas más tarde
+            $positive_fees[] = [
+                'id' => $alegra_product_id,
+                'name' => 'Cargo: ' . $fee_name,
+                'price' => $fee_total, // Ya es un entero redondeado
+                'quantity' => 1,
+                'discount' => 0,
+                'tax' => [],
             ];
         }
+    }
 
-        // 2. Procesar cargos/tarifas (Fees: Positivos y Negativos)
-        foreach ( $order->get_fees() as $fee ) {
-            $fee_total = (float) $fee->get_total();
-            $fee_name = substr( $fee->get_name(), 0, 150 );
-            
-            if ( $fee_total > 0 ) {
-                // Tarifa Positiva (Cargo)
-                $items[] = [
-                    'id'          => $alegra_product_id,
-                    'name'        => 'Cargo: ' . $fee_name,
-                    'price'       => round( $fee_total, 2 ),
-                    'quantity'    => 1,
-                    'discount'    => 0,
-                    'tax'         => [],
-                ];
-            } elseif ( $fee_total < 0 ) {
-                // Tarifa Negativa (Descuento/Cupón)
-                $discount_amount = abs($fee_total);
-                
-                $items[] = [
-                    'id'          => $alegra_product_id, 
-                    'name'        => 'Descuento Aplicado: ' . $fee_name,
-                    'price'       => round( $discount_amount, 2 ),
-                    'quantity'    => 1,
-                    'discount'    => round( $discount_amount, 2 ), 
-                    'description' => 'Cupón/Descuento aplicado al pedido.',
-                    'tax'         => [],
-                ];
+    // --- 2. Lógica Exacta de Distribución de Descuentos (ENTEROS SIN DECIMALES) ---
+
+    $product_items_array = $order->get_items();
+    $product_item_count = count($product_items_array);
+
+    $remaining_discount = 0;
+    
+    // Solo procedemos a distribuir si hay productos y un descuento total
+    if ($product_item_count > 0 && $negative_fees_discount > 0) {
+        
+        // Calcular la distribución base por ítem (división entera)
+        $base_discount_per_item = floor($negative_fees_discount / $product_item_count);
+        
+        // Calcular el remanente de unidades enteras que quedan (módulo)
+        $remaining_discount = $negative_fees_discount % $product_item_count;
+
+        // Contador para saber a cuántos ítems les queda por aplicar el remanente
+        $remainder_counter = $remaining_discount; 
+        
+    } else {
+        $base_discount_per_item = 0;
+    }
+
+
+    foreach ($product_items_array as $line) {
+        // Obtener el objeto producto asociado a la línea del pedido
+        $product = $line->get_product(); 
+        
+        // RECUPERAR EL ID DE ALEGRA DEL METADATO DEL PRODUCTO
+        $item_alegra_id = $product ? $product->get_meta('_alegra_item_id', true) : null;
+        
+        // Usar el ID específico si existe, sino usar el genérico ($alegra_product_id = 1)
+        $final_alegra_id = !empty($item_alegra_id) && is_numeric($item_alegra_id) 
+                         ? (int) $item_alegra_id 
+                         : $alegra_product_id;
+
+                         
+        $qty = (int) $line->get_quantity();
+        
+        // Usamos el subtotal (total * quantity) como entero
+        $subtotal_line = round((float) $line->get_total()); 
+        
+        // Precio unitario base redondeado (ya incluye descuentos internos de WC)
+        $unit_price_base = $qty > 0 ? round($subtotal_line / $qty) : 0; 
+        
+        $line_discount_amount = 0;
+
+        // Aplicamos el descuento solo si existe
+        if ($negative_fees_discount > 0) {
+            // 2a. Descuento base (ej: 3333)
+            $line_discount_amount = $base_discount_per_item;
+
+            // 2b. Aplicar el remanente (acumulador)
+            if ($remainder_counter > 0) {
+                $line_discount_amount += 1;
+                $remainder_counter--;
             }
         }
-
-
-        // 3. Procesar envío
-        $shipping = (float) $order->get_shipping_total();
-        if ( $shipping > 0 ) {
-            $items[] = [
-                'id'          => $alegra_product_id,
-                'name'        => 'Envío',
-                'price'       => $shipping,
-                'quantity'    => 1,
-                'discount'    => 0,
-                'tax'         => [],
-            ];
+        
+        // Verificación de seguridad: El descuento a restar no debe ser mayor que el subtotal del ítem.
+        if ($line_discount_amount > $subtotal_line) {
+            $line_discount_amount = $subtotal_line;
         }
 
-        // Estructura de la factura
-        return [
-            'client'        => [ 'id' => $client_id ],
-            'items'         => $items,
-            'status'        => 'draft',
-            'date'          => date('Y-m-d'),
-            'dueDate'       => date('Y-m-d'),
-            'paymentMethod' => 'CASH',
-            'paymentForm'   => 'CASH',
-            'type'          => 'NATIONAL',
-            'operationType' => 'STANDARD',
-            'notes'         => 'Pedido WooCommerce #' . $order->get_id()
+        // --- APLICACIÓN DIRECTA AL PRECIO (TU REQUERIMIENTO) ---
+        
+        // Nuevo Precio Unitario = (Precio Base * Cantidad - Descuento Aplicado) / Cantidad
+        $new_unit_price = ($unit_price_base * $qty - $line_discount_amount) / $qty;
+        
+        // Forzamos el nuevo precio unitario a un entero si es necesario, redondeando hacia arriba o abajo
+        $final_price = round($new_unit_price); 
+
+        // --------------------------------------------------------
+
+        $items[] = [
+            'id' => $alegra_product_id,
+            'name' => substr($line->get_name(), 0, 190),
+            // El precio unitario es el que se redujo por el descuento
+            'price' => $final_price, 
+            'quantity' => $qty,
+            'discount' => 0, // El descuento ya está incluido en 'price'
+            'description' => substr($line->get_name(), 0, 400),
+            'tax' => [],
         ];
     }
-    
-    /**
-     * Función utilitaria para calcular el Dígito de Verificación (DV) para NITs.
-     */
-    private function calcular_dv($nit) {
-        $weights = [71,67,59,53,47,43,41,37,29,23,19,17,13,7,3];
-        $nit = preg_replace('/\D/', '', $nit);
-        $len = strlen($nit);
-        $sum = 0;
-        for ($i = 0; $i < $len; $i++) {
-            $sum += $nit[$i] * $weights[(15 - $len) + $i];
-        }
-        $dv = $sum % 11;
-        return ($dv > 1) ? 11 - $dv : $dv;
+
+    // --- 3. Combinar Items, Fees Positivos y Envío ---
+
+    // Añadir fees positivos (Tarifas)
+    $items = array_merge($items, $positive_fees);
+
+    // Procesar envío (como entero)
+    $shipping = round((float) $order->get_shipping_total()); 
+    if ($shipping > 0) {
+        $items[] = [
+            'id' => $alegra_product_id,
+            'name' => 'ENVIO',
+            'price' => $shipping, // Ya es un entero
+            'quantity' => 1,
+            'discount' => 0,
+            'tax' => [],
+        ];
     }
+
+    // --- 4. Estructura Final ---
+    return [
+        'client' => ['id' => $client_id],
+        'items' => $items,
+        'status' => 'draft',
+        'date' => date('Y-m-d'),
+        'dueDate' => date('Y-m-d'),
+        'paymentMethod' => 'CASH',
+        'paymentForm' => 'CASH',
+        'type' => 'NATIONAL',
+        'operationType' => 'STANDARD',
+        'notes' => 'Pedido WooCommerce #' . $order->get_id()
+    ];
+}
 }
