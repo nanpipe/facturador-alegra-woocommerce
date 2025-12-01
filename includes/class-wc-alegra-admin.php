@@ -290,7 +290,7 @@ class WC_Alegra_Admin
  * Añade el campo de ID de Alegra en la edición del producto.
  */
 public function add_alegra_product_field() {
-    echo '<div class="options_group show_if_simple">';
+    echo '<div class="options_group ">';
     
     woocommerce_wp_text_input([
         'id'          => '_alegra_item_id',
