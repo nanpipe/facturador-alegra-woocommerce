@@ -22,12 +22,10 @@ class Alegra_Data_Mapper
         // A. Identificación
         $billing_id = $order->get_meta('_billing_cedula')
             ?: $order->get_meta('billing_cedula')
-            ?: $order->get_meta('_billing_identification')
-            ?: $order->get_meta('billing_identification')
-            ?: $order->get_billing_email();
+            ?: $order->get_meta('billing_identification');
 
         if (empty($billing_id)) {
-            $billing_id = 'CF-' . $order->get_id(); // Consumidor Final si no hay ID
+            $billing_id = '222222222' . $order->get_id(); // Consumidor Final si no hay ID
         }
 
         // B. Buscar existente
@@ -46,9 +44,13 @@ class Alegra_Data_Mapper
 
         $company = $order->get_billing_company();
         $email = $order->get_billing_email();
+        $wc_regimen = $order->get_meta('billing_regimen');
+        $wc_regimen_id = $order->get_meta('billing_regimen');
+        $wc_person_type_id = $order->get_meta('billing_persontype');
 
         $wc_type = $order->get_meta('billing_typeid') ?: 'CC';
         $doc_type = 'CC';
+
         if (stripos($wc_type, 'NIT') !== false)
             $doc_type = 'NIT';
         if (stripos($wc_type, 'CE') !== false)
@@ -58,13 +60,36 @@ class Alegra_Data_Mapper
         if (stripos($wc_type, 'PP') !== false)
             $doc_type = 'PP';
 
-        if (!empty($company) || $doc_type === 'NIT') {
+
+        // --- 1. Mapeo de Tipo de Persona (kindOfPerson) ---
+        // Si el valor del formulario está presente, lo usamos. Si no, usamos el fallback.
+        if (!empty($wc_person_type_id) && ($wc_person_type_id === 'LEGAL_ENTITY' || $wc_person_type_id === 'PERSON_ENTITY')) {
+            $kindOfPerson = $wc_person_type_id;
+        } elseif ($doc_type === 'NIT') {
+            // Fallback: Si es NIT y no hay formulario, asumimos Jurídica
             $kindOfPerson = 'LEGAL_ENTITY';
+        } else {
+            // Fallback general
+            $kindOfPerson = 'PERSON_ENTITY';
+        }
+
+        // --- 2. Mapeo de Régimen (regime) ---
+        // Usamos el valor del formulario si está presente.
+        if (!empty($wc_regimen_id) && $wc_regimen_id !== '0') { // Asumiendo '0' o vacío si no se selecciona
+            $regime = $wc_regimen_id;
+        } elseif ($kindOfPerson === 'LEGAL_ENTITY') {
+            // Fallback: Si es Persona Jurídica y no hay formulario, asumimos Común
             $regime = 'COMMON_REGIME';
+        } else {
+            // Fallback general
+            $regime = 'SIMPLIFIED_REGIME';
+        }
+
+
+        // --- Lógica de Asignación de Nombre ---
+        if ($kindOfPerson === 'LEGAL_ENTITY') {
             $display_name = !empty($company) ? $company : $full_name;
         } else {
-            $kindOfPerson = 'PERSON_ENTITY';
-            $regime = 'SIMPLIFIED_REGIME';
             $display_name = $full_name;
         }
 
@@ -273,17 +298,17 @@ class Alegra_Data_Mapper
         // --- 4. Estructura Final ---
 
         // 1. Obtener la zona horaria configurada en WordPress (ej: 'America/Bogota')
-    $timezone = wp_timezone_string(); 
-    
-    // 2. Crear un objeto DateTime con la zona horaria correcta
-    // Esto asegura que la fecha actual sea calculada localmente.
-    $local_datetime = new DateTime('now', new DateTimeZone($timezone));
-    
-    // 3. Formatear la fecha local
-    $local_date = $local_datetime->format('Y-m-d');
-    
-    // La API de Alegra suele usar 'open' o 'draft'. He dejado 'open' como está.
-    $status = 'open';
+        $timezone = wp_timezone_string();
+
+        // 2. Crear un objeto DateTime con la zona horaria correcta
+        // Esto asegura que la fecha actual sea calculada localmente.
+        $local_datetime = new DateTime('now', new DateTimeZone($timezone));
+
+        // 3. Formatear la fecha local
+        $local_date = $local_datetime->format('Y-m-d');
+
+        // La API de Alegra suele usar 'open' o 'draft'. He dejado 'open' como está.
+        $status = 'open';
 
         return [
             'client' => ['id' => $client_id],
